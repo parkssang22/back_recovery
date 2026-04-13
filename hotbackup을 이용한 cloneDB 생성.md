@@ -1,0 +1,255 @@
+## 순서
+1. 기존 hotbackup 삭제
+2. hot backup 실행
+3. pfile 생성 후 parameter 값 orcl에서 모두 orcl2로 변경
+4. $ORACLE_BASE/admin/RYUDB2 생성 및 dump dest 생성
+5. hot backup 된 data file /oracle/oradata/RYUDB2 경로로 복사
+6. Controlfile 생성 구문 및 Recover 구문 추출
+7. 원본 DB에서 CURRENT REDO LOG 확인(Hot backup 이후에 log switch가 일어나지 않았을 경우 대비)
+8. Controlfile 생성 및 Recover 실행
+9. TEMP 생성 후 DB 상태 확인
+
+## 1. 기존 hotbackup 삭제
+```bash
+[oracle@ora19c ~]$ rm -rf /hotbackup/*
+```
+
+## hot backup 실행
+```bash
+SYS @ orcl > col tablespace_name for a10
+SYS @ orcl > col file_name for a45
+SYS @ orcl > select tablespace_name, file_name
+  2  from dba_data_files;
+
+TABLESPACE FILE_NAME
+---------- ---------------------------------------------
+USERS      /u01/app/oracle/oradata/ORCL/users01.dbf
+UNDOTBS1   /u01/app/oracle/oradata/ORCL/undotbs01.dbf
+SYSAUX     /u01/app/oracle/oradata/ORCL/sysaux01.dbf
+SYSTEM     /u01/app/oracle/oradata/ORCL/system01.dbf
+TS100      /u01/app/oracle/oradata/ORCL/ts100.dbf
+
+SYS @ orcl > alter tablespace system begin backup;
+
+Tablespace altered.
+
+SYS @ orcl > alter tablespace sysaux begin backup;
+
+Tablespace altered.
+
+SYS @ orcl > alter tablespace undotbs1 begin backup;
+
+Tablespace altered.
+
+SYS @ orcl > alter tablespace users begin backup;
+
+Tablespace altered.
+
+SYS @ orcl > alter tablespace ts100 begin backup;
+
+Tablespace altered.
+
+[oracle@ora19c ~]$ cp /u01/app/oracle/oradata/ORCL/users01.dbf ./hotbackup/
+[oracle@ora19c ~]$ cp /u01/app/oracle/oradata/ORCL/system01.dbf ./hotbackup/
+[oracle@ora19c ~]$ cp /u01/app/oracle/oradata/ORCL/sysaux01.dbf ./hotbackup/
+[oracle@ora19c ~]$ cp /u01/app/oracle/oradata/ORCL/undotbs01.dbf ./hotbackup/
+[oracle@ora19c ~]$ cp /u01/app/oracle/oradata/ORCL/ts100.dbf ./hotbackup/
+
+[oracle@ora19c ~]$ cd -
+/home/oracle/hotbackup
+[oracle@ora19c hotbackup]$ ls
+hotbackup_20260326_105557.log  sysaux01.dbf  ts01.dbf   undotbs01.dbf
+indx01.dbf                     system01.dbf  ts100.dbf  users01.dbf
+
+
+SYS @ orcl > select * from v$backup;
+
+     FILE# STATUS                CHANGE# TIME                    CON_ID
+---------- ------------------ ---------- ------------------- ----------
+         1 ACTIVE                5644706 2026/04/13:15:19:06          0
+         3 ACTIVE                5644712 2026/04/13:15:19:18          0
+         4 ACTIVE                5644718 2026/04/13:15:19:30          0
+         7 ACTIVE                5645597 2026/04/13:15:28:28          0
+         9 ACTIVE                5645602 2026/04/13:15:28:37          0
+
+SYS @ orcl > alter tablespace system end backup;
+
+Tablespace altered.
+
+SYS @ orcl > alter tablespace sysaux end backup;
+
+Tablespace altered.
+
+SYS @ orcl > alter tablespace users end backup;
+
+Tablespace altered.
+
+SYS @ orcl > alter tablespace undotbs1 end backup;
+
+Tablespace altered.
+
+SYS @ orcl > alter tablespace ts100 end backup;
+
+Tablespace altered.
+```
+## 3. pfile 생성 후 parameter 값 orcl에서 모두 orcl2로 변경
+```bash
+SYS @ orcl > create pfile from spfile;
+
+[oracle@ora19c dbs]$ cp initorcl.ora initorcl2.ora
+[oracle@ora19c dbs]$ vi initorcl2.ora
+```
+<img width="817" height="440" alt="orcl2" src="https://github.com/user-attachments/assets/888596be-10df-4b77-b1ef-927bb5614da3" />
+
+다음과 같이 대문자 ORCL도 ORCL2로 변경 :%s/ORCL/ORCL2/g
+
+## 4. $ORACLE_BASE/admin/ORCL2 생성 및 dump dest 생성
+```bash
+[oracle@ora19c admin]$ mkdir ORCL2
+[oracle@ora19c ORCL2]$ mkdir adump bdump cdump udump dpdump
+[oracle@ora19c ORCL2]$ ls
+adump  bdump  cdump  dpdump  udump
+```
+
+## 5. hot backup 된 data file /oracle/oradata/ORCL2 경로로 복사
+```bash
+[oracle@ora19c ~]$ mkdir ORCL2
+[oracle@ora19c ~]$ cd ORCL2
+[oracle@ora19c ORCL2]$ ls -la
+합계 8
+drwxr-xr-x.  2 oracle oinstall    6  4월 13 15:57 .
+drwx------. 33 oracle oinstall 4096  4월 13 15:57 ..
+[oracle@ora19c ORCL2]$
+[oracle@ora19c ORCL2]$ cp /home/oracle/hotbackup/*.dbf .
+[oracle@ora19c ORCL2]$ ls
+indx01.dbf  sysaux01.dbf  system01.dbf  ts01.dbf  ts100.dbf  undotbs01.dbf  users01.dbf
+```
+
+## 6. Controlfile 생성 구문 및 Recover 구문 추출
+```bash
+[oracle@ora19c ORCL2]$ vi control.sql
+```
+
+<img width="824" height="437" alt="orcl2_control" src="https://github.com/user-attachments/assets/34717624-6f9b-47ae-9bb1-a53f9ab50173" />
+
+```
+SYS @ orcl > startup nomount pfile='/u01/app/oracle/product/19.3.0/dbhome_1/dbs/initorcl2.ora';
+SYS @ orcl > show parameter db_name
+
+NAME                                 TYPE
+------------------------------------ ---------------------------------
+VALUE
+------------------------------
+db_name                              string
+ORCL2
+SYS @ orcl > @control
+```
+
+```
+# 백업 기간 동안 발생한 모든 변화(Redo Log)를 다시 입혀주는 과정(Recovery) 에러
+SYS @ orcl > recover database using backup controlfile
+ORA-00279: change 5644706 generated at 04/13/2026 15:19:06 needed for thread 1
+ORA-00289: suggestion : /home/oracle/arch4/ORCL2DB_1_38_1229264056.arc
+ORA-00280: change 5644706 for thread 1 is in sequence #38
+
+
+Specify log: {<RET>=suggested | filename | AUTO | CANCEL}
+
+ORA-00308: ���������� ���� '/home/oracle/arch4/ORCL2DB_1_38_1229264056.arc'��
+�� �� �������� ORA-27037: ���� ������
+���� �� �������� Linux-x86_64 Error: 2: No
+such file or directory
+Additional information: 7
+
+
+SYS @ orcl > recover database using backup controlfile
+ORA-00279: change 5644706 generated at 04/13/2026 15:19:06 needed for thread 1
+ORA-00289: suggestion : /home/oracle/arch4/ORCL2DB_1_38_1229264056.arc
+ORA-00280: change 5644706 for thread 1 is in sequence #38
+
+
+Specify log: {<RET>=suggested | filename | AUTO | CANCEL}
+auto
+ORA-00308: ���������� ���� '/home/oracle/arch4/ORCL2DB_1_38_1229264056.arc'��
+�� �� �������� ORA-27037: ���� ������
+���� �� �������� Linux-x86_64 Error: 2: No
+such file or directory
+Additional information: 7
+
+
+ORA-00308: ���������� ���� '/home/oracle/arch4/ORCL2DB_1_38_1229264056.arc'��
+�� �� �������� ORA-27037: ���� ������
+���� �� �������� Linux-x86_64 Error: 2: No
+such file or directory
+Additional information: 7
+```
+## 해결법 (ORCL로 접속)
+```bash
+SYS @ orcl > SELECT member FROM v$logfile;
+
+MEMBER
+--------------------------------------------------------------------------------
+/u01/app/oracle/oradata/ORCL/redo04.log
+/u01/app/oracle/oradata/ORCL/redo04b.log
+/u01/app/oracle/oradata/ORCL/redo03.log
+/u01/app/oracle/oradata/ORCL/redo03b.log
+/u01/app/oracle/oradata/ORCL/redo02b.log
+/u01/app/oracle/oradata/ORCL/redo02.log
+/u01/app/oracle/oradata/ORCL/redo01.log
+/u01/app/oracle/oradata/ORCL/redo01b.log
+
+SYS @ orcl > alter database open;
+
+Database altered.
+
+SYS @ orcl > ALTER SYSTEM ARCHIVE LOG CURRENT;
+
+System altered.
+
+# 다시 ORCL2로 접속
+[oracle@ora19c ~]$ cd /home/oracle/arch
+[oracle@ora19c arch]$ ls
+ORCLDB_1_38_1229264056.arc
+
+SYS @ ORCL2 > RECOVER DATABASE USING BACKUP CONTROLFILE UNTIL CANCEL;
+
+Specify log: {<RET>=suggested | filename | AUTO | CANCEL}
+/home/oracle/arch/ORCLDB_1_38_1229264056.arc
+ORA-00279: change 5648016 generated at 04/13/2026 16:51:53 needed for thread 1
+ORA-00289: suggestion : /home/oracle/arch4/ORCL2DB_1_39_1229264056.arc
+ORA-00280: change 5648016 for thread 1 is in sequence #39
+ORA-00278: log file '/home/oracle/arch/ORCLDB_1_38_1229264056.arc' no longer
+needed for this recovery
+# no longer needed : 데이터가 DB에 잘 입혀졌다
+
+Specify log: {<RET>=suggested | filename | AUTO | CANCEL}
+cancel
+Media recovery cancelled.
+SYS @ ORCL2 > alter database open resetlogs;
+
+```
+
+- 임시 테이블 추가
+```bash
+SYS @ ORCL2 > alter tablespace temp add tempfile
+  2   '/home/oracle/ORCL2/temp01.dbf'
+  3  size 500M reuse autoextend off;
+
+Tablespace altered.
+```
+
+
+
+## 7. 원본 DB에서 CURRENT REDO LOG 확인(Hot backup 이후에 log switch가 일어나지 않았을 경우 대비)
+## 8. Controlfile 생성 및 Recover 실행
+
+- 7, 8번을 6번에서 진행하였다
+  
+## 9. DB 상태 확인
+- DB 2개 상태 확인
+```bash
+[oracle@ora19c ~]$ ps -ef | grep pmon
+oracle   10623     1  0 16:49 ?        00:00:00 ora_pmon_orcl
+oracle   14068     1  0 16:56 ?        00:00:00 ora_pmon_ORCL2
+oracle   22285 12148  0 17:15 pts/0    00:00:00 grep --color=auto pmon
+```
